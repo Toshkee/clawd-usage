@@ -1,0 +1,9 @@
+{
+  "name": "clawd-usage",
+  "version": "0.3.0",
+  "description": "Clawd waves his ultracode wand and does his banner tricks above the prompt beside live meters of context, rate limits and cost",
+  "author": {
+    "name": "Pavle Tosic"
+  },
+  "types": "./types/index.d.ts"
+}
