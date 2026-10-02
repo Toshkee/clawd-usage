@@ -123,10 +123,80 @@ test('draws the measured figures on each surface with a band', async ($, on) => 
     expect(await ui.find({ type: 'Text', text: '42%' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '84k/200k · $1.24' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '↻ 2h 14m' })).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: '█'.repeat(10) }))?.props.color).toBe('error')
     expect(await ui.find({ key: 'clawd' })).toBeDefined()
     await ui.unmount()
   }
+})
+
+test('the terminal draws the bars in blocks, the fullest in the error color', async ($, on) => {
+  world(on, QUIET)
+
+  await $.session.start(START)
+  await $.session.measure({
+    ...MEASURED,
+    rateLimits: [...MEASURED.rateLimits],
+    changed: [...MEASURED.changed],
+  })
+  const ui = await $.ui.mount({
+    plugin: 'clawd-usage',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: props(),
+  })
+
+  expect((await ui.find({ type: 'Text', text: '█'.repeat(10) }))?.props.color).toBe('error')
+  expect((await ui.findAll({ type: 'Text', text: '░' })).length).toBe(2)
+})
+
+// A desktop sets text in a font of its own, where block glyphs neither fill
+// their cells nor line up.
+test('off the terminal Clawd and the bars are pictures, no block left to a text font', async ($, on) => {
+  const { clock } = world(on, QUIET)
+
+  await $.session.start(START)
+  await $.session.measure({
+    ...MEASURED,
+    rateLimits: [...MEASURED.rateLimits],
+    changed: [...MEASURED.changed],
+  })
+  const ui = await $.ui.mount({
+    plugin: 'clawd-usage',
+    surface: 'desktop',
+    component: 'AbovePrompt',
+    props: props(),
+  })
+  const pictures = async () =>
+    (await ui.findAll({ type: 'Svg' })).map(picture => picture.props)
+  const clawd = async () => String((await pictures()).at(-1)?.source)
+  const drawn = await pictures()
+  const texts = await ui.findAll({ type: 'Text' })
+
+  expect(drawn.map(picture => picture.alt)).toEqual(['ctx 42%', '5h 24%', '7d 91%', 'Clawd'])
+  expect(texts.some(text => /[\u2580-\u259f╱✦]/.test(text.text ?? ''))).toBe(false)
+  expect(await ui.find({ type: 'Text', text: 'ctx' })).toBeDefined()
+
+  // The fullest bar is lit end to end, in the error shade.
+  expect(String(drawn[2]?.source).includes('<rect width="90" height="14" fill="rgb(232,80,100)"/>')).toBe(true)
+
+  // Clawd is eleven cells by three: his body, his eyes on the backdrop, the
+  // star at the wand's tip.
+  expect([drawn[3]?.width, drawn[3]?.height]).toEqual([99, 54])
+  expect((await clawd()).includes(`fill="${ORANGE}"`)).toBe(true)
+  expect((await clawd()).includes('fill="rgb(0,0,0)"')).toBe(true)
+  expect((await clawd()).includes('fill="rgb(255,252,235)"')).toBe(true)
+
+  // He moves as in the terminal: the cast, then the jump with the wand away,
+  // in a puff of dust.
+  const flaring = await clawd()
+
+  await clock.advance(1000 + 10 * FRAME_MS)
+
+  expect(await clawd()).not.toBe(flaring)
+
+  await clock.set(NOW + JUMP_AT + 10)
+
+  expect((await clawd()).includes('rgb(255,252,235)')).toBe(false)
+  expect((await clawd()).includes('<circle')).toBe(true)
 })
 
 test('Clawd stands by the meters with the wand up, his eyes on the backdrop', async ($, on) => {

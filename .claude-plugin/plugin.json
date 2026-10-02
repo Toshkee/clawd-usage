@@ -1,6 +1,6 @@
 {
   "name": "clawd-usage",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Clawd waves his ultracode wand and does his banner tricks above the prompt beside live meters of context, rate limits and cost",
   "author": {
     "name": "Pavle Tosic"

@@ -320,6 +320,52 @@ const SPRITE_COLUMNS = 9
 const CLAWD_COLUMNS = SPRITE_COLUMNS + WAND.length + FLAME.length
 const TIP = { column: SPRITE_COLUMNS + 1, row: 0 }
 
+// A surface that draws text in a font of its own leaves block glyphs short of
+// their cells and out of line: there Clawd and the bars are pictures, a cell
+// this many CSS pixels.
+const CELL = { width: 9, height: 18 }
+const PICTURE = {
+  width: CLAWD_COLUMNS * CELL.width,
+  height: SPRITE_ROWS * CELL.height,
+}
+const BAR = { width: BAR_COLUMNS * CELL.width, height: 14 }
+const LABEL_COLUMNS = 4
+const PERCENT_COLUMNS = 7
+
+// The part of its cell a block glyph fills, on a grid of halves across and
+// eighths down: left, top, width, height.
+type Part = [number, number, number, number]
+
+const WHOLE: Part = [0, 0, 2, 8]
+const PARTS: Record<string, Part[]> = {
+  '█': [WHOLE],
+  '▀': [[0, 0, 2, 4]],
+  '▄': [[0, 4, 2, 4]],
+  '▌': [[0, 0, 1, 8]],
+  '▐': [[1, 0, 1, 8]],
+  '▘': [[0, 0, 1, 4]],
+  '▝': [[1, 0, 1, 4]],
+  '▖': [[0, 4, 1, 4]],
+  '▗': [[1, 4, 1, 4]],
+  '▛': [[0, 0, 2, 4], [0, 4, 1, 4]],
+  '▜': [[0, 0, 2, 4], [1, 4, 1, 4]],
+  '▙': [[0, 0, 1, 4], [0, 4, 2, 4]],
+  '▟': [[1, 0, 1, 4], [0, 4, 2, 4]],
+  '▂': [[0, 6, 2, 2]],
+  '▁': [[0, 7, 2, 1]],
+}
+
+// The theme's colors by name, which a picture cannot use: one shade of each
+// that reads on a dark page and on a light one.
+const INKS: Record<string, string> = {
+  clawd_body: 'rgb(215,119,87)',
+  clawd_background: 'rgb(0,0,0)',
+  inactive: 'rgb(136,136,136)',
+  success: 'rgb(64,168,88)',
+  warning: 'rgb(224,160,16)',
+  error: 'rgb(232,80,100)',
+}
+
 const LABELS: Record<string, string> = {
   five_hour: '5h',
   seven_day: '7d',
@@ -605,6 +651,113 @@ const toPieces = (cells: Cell[]) => {
   return pieces
 }
 
+const toInk = (color: string) => INKS[color] ?? color
+
+const toPixels = (cells: number) => Number(cells.toFixed(2))
+
+const toSvg = (width: number, height: number, shapes: string) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" ` +
+  `viewBox="0 0 ${width} ${height}">${shapes}</svg>`
+
+const toRect = (
+  column: number,
+  row: number,
+  [left, top, width, height]: Part,
+  fill: string,
+) =>
+  `<rect x="${toPixels((column + left / 2) * CELL.width)}" ` +
+  `y="${toPixels((row + top / 8) * CELL.height)}" ` +
+  `width="${toPixels((width / 2) * CELL.width)}" ` +
+  `height="${toPixels((height / 8) * CELL.height)}" fill="${fill}"/>`
+
+// One cell's blocks: a face cell over the backdrop, a lid the backdrop over
+// his color.
+const toBlocks = ({ glyph, color, on }: Cell, column: number, row: number) => {
+  const ink = toInk(on === 'lid' ? BACKDROP : color)
+  const ground =
+    on === 'lid' ? toInk(color) : on === 'face' ? toInk(BACKDROP) : null
+
+  return [
+    ...(ground === null ? [] : [toRect(column, row, WHOLE, ground)]),
+    ...(PARTS[glyph] ?? []).map(part => toRect(column, row, part, ink)),
+  ]
+}
+
+// The dust of a landing, mid-cell: a speck, or a curl.
+const toDust = ({ glyph, color }: Cell, column: number, row: number) => {
+  const left = column * CELL.width
+  const middle = (row + 0.5) * CELL.height
+
+  if (glyph === '·') {
+    return [
+      `<circle cx="${left + CELL.width / 2}" cy="${middle}" r="1.3" fill="${toInk(color)}"/>`,
+    ]
+  }
+
+  if (glyph === '~') {
+    return [
+      `<path d="M${left + 1.5} ${middle}q1.5 -3 3 0t3 0" fill="none" ` +
+        `stroke="${toInk(color)}" stroke-width="1.3" stroke-linecap="round"/>`,
+    ]
+  }
+
+  return []
+}
+
+// The wand from the claw up to its tip, and the flame there: a star of four
+// points, larger as it flares.
+const toWandShapes = ({ wand, flame, isFlaring }: Wand) => {
+  const left = (TIP.column - 1) * CELL.width
+  const top = TIP.row * CELL.height
+  const x = (TIP.column + 0.5) * CELL.width
+  const y = top + CELL.height / 2
+  const reach = isFlaring ? 4.5 : 3.9
+  const waist = toPixels(reach * 0.2)
+
+  return (
+    `<path d="M${left + 1} ${top + CELL.height - 2}L${left + CELL.width - 1} ${top + 2}" ` +
+    `stroke="${toInk(wand)}" stroke-width="1.6" stroke-linecap="round"/>` +
+    `<path d="M${x} ${y - reach}` +
+    `Q${x + waist} ${y - waist} ${x + reach} ${y}` +
+    `Q${x + waist} ${y + waist} ${x} ${y + reach}` +
+    `Q${x - waist} ${y + waist} ${x - reach} ${y}` +
+    `Q${x - waist} ${y - waist} ${x} ${y - reach}Z" fill="${toInk(flame)}"/>`
+  )
+}
+
+// Clawd as a picture: every cell's blocks edge to edge, then the dust and the
+// wand over them.
+const toPicture = (rows: Cell[][], wand: Wand | null) => {
+  const cells = rows.flatMap((row, at) =>
+    row.map((cell, column) => ({ cell, column, row: at })),
+  )
+  const blocks = cells.flatMap(({ cell, column, row }) =>
+    toBlocks(cell, column, row),
+  )
+  const dust = cells.flatMap(({ cell, column, row }) =>
+    toDust(cell, column, row),
+  )
+
+  return toSvg(
+    PICTURE.width,
+    PICTURE.height,
+    `<g shape-rendering="crispEdges">${blocks.join('')}</g>` +
+      dust.join('') +
+      (wand ? toWandShapes(wand) : ''),
+  )
+}
+
+// A meter's bar as a picture: its track, and as much of it lit as the
+// terminal's blocks would be.
+const toBar = (filled: number, tone: string) =>
+  toSvg(
+    BAR.width,
+    BAR.height,
+    `<g shape-rendering="crispEdges">` +
+      `<rect width="${BAR.width}" height="${BAR.height}" fill="${toInk('inactive')}" fill-opacity="0.3"/>` +
+      `<rect width="${filled * CELL.width}" height="${BAR.height}" fill="${toInk(tone)}"/></g>`,
+  )
+
 // What the timer and the drawing share; a reload starts it over, harmlessly.
 const band = {
   frame: 0,
@@ -850,6 +1003,9 @@ export const register: Register = on => {
     }
 
     const { Box, Text } = $.ui.resolve(e)
+    // Only the terminal draws block glyphs in whole cells: the rest get the
+    // pictures.
+    const Svg = e.surface === 'terminal' ? null : $.ui.resolve(e).Svg
     const meters = toMeters(figures, await $.clock.now())
     const rows = Math.max(SPRITE_ROWS, meters.length)
 
@@ -880,9 +1036,35 @@ export const register: Register = on => {
               Math.ceil((percent / 100) * BAR_COLUMNS),
             )
 
+            if (Svg) {
+              return (
+                <Box alignItems="center">
+                  <Box width={LABEL_COLUMNS}>
+                    <Text dimColor>{meter.label}</Text>
+                  </Box>
+                  <Svg
+                    source={toBar(filled, toneOf(percent))}
+                    alt={`${meter.label} ${showPercent(meter.percent)}`}
+                    width={BAR.width}
+                    height={BAR.height}
+                  />
+                  <Box
+                    width={PERCENT_COLUMNS}
+                    paddingRight={2}
+                    justifyContent="flex-end"
+                  >
+                    <Text>{showPercent(meter.percent)}</Text>
+                  </Box>
+                  <Text dimColor wrap="truncate-end">
+                    {meter.detail}
+                  </Text>
+                </Box>
+              )
+            }
+
             return (
               <Box>
-                <Text dimColor>{meter.label.padEnd(4)}</Text>
+                <Text dimColor>{meter.label.padEnd(LABEL_COLUMNS)}</Text>
                 <Text color={toneOf(percent)}>{'█'.repeat(filled)}</Text>
                 <Text dimColor>{'░'.repeat(BAR_COLUMNS - filled)}</Text>
                 <Text>{` ${showPercent(meter.percent).padStart(4)}  `}</Text>
@@ -893,35 +1075,46 @@ export const register: Register = on => {
             )
           })}
         </Box>
-        <Box key="clawd" flexDirection="column" marginLeft={GAP}>
-          {toDrawn(frame, paint).map((cells, row) => (
-            <Box>
-              {toPieces(cells).map(piece =>
-                piece.on === 'face' ? (
-                  <Text color={piece.color} backgroundColor={BACKDROP}>
-                    {piece.glyphs}
+        {Svg ? (
+          <Box key="clawd" marginLeft={GAP} alignSelf="center">
+            <Svg
+              source={toPicture(toDrawn(frame, paint), wand)}
+              alt="Clawd"
+              width={PICTURE.width}
+              height={PICTURE.height}
+            />
+          </Box>
+        ) : (
+          <Box key="clawd" flexDirection="column" marginLeft={GAP}>
+            {toDrawn(frame, paint).map((cells, row) => (
+              <Box>
+                {toPieces(cells).map(piece =>
+                  piece.on === 'face' ? (
+                    <Text color={piece.color} backgroundColor={BACKDROP}>
+                      {piece.glyphs}
+                    </Text>
+                  ) : piece.on === 'lid' ? (
+                    <Text color={BACKDROP} backgroundColor={piece.color}>
+                      {piece.glyphs}
+                    </Text>
+                  ) : (
+                    <Text color={piece.color}>{piece.glyphs}</Text>
+                  ),
+                )}
+                {wand && row === TIP.row ? (
+                  <Text color={wand.wand} bold>
+                    {WAND}
                   </Text>
-                ) : piece.on === 'lid' ? (
-                  <Text color={BACKDROP} backgroundColor={piece.color}>
-                    {piece.glyphs}
+                ) : null}
+                {wand && row === TIP.row ? (
+                  <Text color={wand.flame} bold={wand.isFlaring}>
+                    {FLAME}
                   </Text>
-                ) : (
-                  <Text color={piece.color}>{piece.glyphs}</Text>
-                ),
-              )}
-              {wand && row === TIP.row ? (
-                <Text color={wand.wand} bold>
-                  {WAND}
-                </Text>
-              ) : null}
-              {wand && row === TIP.row ? (
-                <Text color={wand.flame} bold={wand.isFlaring}>
-                  {FLAME}
-                </Text>
-              ) : null}
-            </Box>
-          ))}
-        </Box>
+                ) : null}
+              </Box>
+            ))}
+          </Box>
+        )}
       </Box>
     )
   })

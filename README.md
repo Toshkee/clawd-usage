@@ -13,7 +13,7 @@ Zatim ponovo pokreni Claude Code. Mod se učitava u svakoj sesiji, u bilo kom fo
 ## Korišćenje
 
 - `/clawd` sakriva i ponovo prikazuje traku.
-- Traka se crta u terminalu i u desktop aplikaciji.
+- Traka se crta u terminalu i u desktop aplikaciji. Desktop aplikacija tekst ispisuje svojim fontom, u kojem se blok-znakovi razilaze, pa se Clawd i trake mjerača tamo crtaju kao slike (SVG), ćeliju po ćeliju kao u terminalu.
 - Poslije 5 minuta bez aktivnosti Clawd miruje dok sesija opet ne proradi.
 
 ## Napomene
