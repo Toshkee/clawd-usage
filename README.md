@@ -1,6 +1,6 @@
 # clawd-usage
 
-Mod za Claude Code: iznad prompta crta mjerače potrošnje (kontekst sesije, 5h i 7d limit, cijena) i Clawda sa ultracode štapićem, koji između zamaha izvodi trikove iz banera.
+Mod za Claude Code: iznad prompta crta mjerače potrošnje kao „deck” (zaglavlje, pa po red za kontekst sesije, 5h i 7d limit, sa trakom, potrošnjom i odbrojavanjem do resetovanja) i pored njih Clawda sa ultracode štapićem, koji između zamaha izvodi trikove iz banera.
 
 ## Instalacija
 
@@ -13,6 +13,7 @@ Zatim ponovo pokreni Claude Code. Mod se učitava u svakoj sesiji, u bilo kom fo
 ## Korišćenje
 
 - `/clawd` sakriva i ponovo prikazuje traku.
+- `0: clawd ▾` u zaglavlju (klik ili taster `0`) skuplja mjerače u jedan red i ponovo ih otvara. Taster `0` radi dok je traka u fokusu, a i kao prvi znak u praznom promptu.
 - Traka se crta u terminalu i u desktop aplikaciji. Desktop aplikacija tekst ispisuje svojim fontom, u kojem se blok-znakovi razilaze, pa se Clawd i trake mjerača tamo crtaju kao slike (SVG), ćeliju po ćeliju kao u terminalu.
 - Poslije 5 minuta bez aktivnosti Clawd miruje dok sesija opet ne proradi.
 

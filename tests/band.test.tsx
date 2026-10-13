@@ -121,14 +121,15 @@ test('draws the measured figures on each surface with a band', async ($, on) => 
     })
 
     expect(await ui.find({ type: 'Text', text: '42%' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '84k/200k · $1.24' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '↻ 2h 14m' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '84k / 200k · $1.24' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '5h · 24% used' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '↻ 2:14:00' })).toBeDefined()
     expect(await ui.find({ key: 'clawd' })).toBeDefined()
     await ui.unmount()
   }
 })
 
-test('the terminal draws the bars in blocks, the fullest in the error color', async ($, on) => {
+test('the terminal draws a row a meter, its bar as wide as the band allows, the fullest in the error color', async ($, on) => {
   world(on, QUIET)
 
   await $.session.start(START)
@@ -144,8 +145,20 @@ test('the terminal draws the bars in blocks, the fullest in the error color', as
     props: props(),
   })
 
-  expect((await ui.find({ type: 'Text', text: '█'.repeat(10) }))?.props.color).toBe('error')
-  expect((await ui.findAll({ type: 'Text', text: '░' })).length).toBe(2)
+  const color = async (text: string) =>
+    (await ui.find({ type: 'Text', text }))?.props.color
+
+  // A hundred columns leave the bars their longest, 36 segments.
+  expect(await color('▰'.repeat(33))).toBe('error')
+  expect((await ui.find({ type: 'Text', text: /^▱{3}$/ }))?.props.dimColor).toBe(true)
+  expect((await ui.find({ type: 'Text', text: /^▰{9}$/ }))?.props.color).toBe('claude')
+
+  // Each row its icon in the meter's color and its name bold: the context
+  // in its own color, the windows in Clawd's orange until 80% turns them red.
+  expect(await color('● ')).toBe('suggestion')
+  expect(await color('◷ ')).toBe('claude')
+  expect(await color('◑ ')).toBe('error')
+  expect((await ui.find({ type: 'Text', text: 'Weekly · 7d' }))?.props.bold).toBe(true)
 })
 
 // A desktop sets text in a font of its own, where block glyphs neither fill
@@ -172,11 +185,16 @@ test('off the terminal Clawd and the bars are pictures, no block left to a text 
   const texts = await ui.findAll({ type: 'Text' })
 
   expect(drawn.map(picture => picture.alt)).toEqual(['ctx 42%', '5h 24%', '7d 91%', 'Clawd'])
-  expect(texts.some(text => /[\u2580-\u259f╱✦]/.test(text.text ?? ''))).toBe(false)
-  expect(await ui.find({ type: 'Text', text: 'ctx' })).toBeDefined()
+  expect(texts.some(text => /[\u2580-\u259f\u25b0\u25b1╱✦]/.test(text.text ?? ''))).toBe(false)
+  expect(await ui.find({ type: 'Text', text: 'Context' })).toBeDefined()
 
-  // The fullest bar is lit end to end, in the error shade.
-  expect(String(drawn[2]?.source).includes('<rect width="90" height="14" fill="rgb(232,80,100)"/>')).toBe(true)
+  // The fullest bar: 33 of its 36 segments lit in the error shade, the rest
+  // outlined.
+  const fullest = String(drawn[2]?.source)
+
+  expect(drawn[2]?.width).toBe(36 * 9)
+  expect(fullest.match(/<polygon[^>]*fill="rgb\(232,80,100\)"/g)?.length).toBe(33)
+  expect(fullest.match(/<polygon[^>]*fill="none"/g)?.length).toBe(3)
 
   // Clawd is eleven cells by three: his body, his eyes on the backdrop, the
   // star at the wand's tip.
@@ -209,7 +227,12 @@ test('Clawd stands by the meters with the wand up, his eyes on the backdrop', as
     component: 'AbovePrompt',
     props: props(),
   })
-  const place = async () => (await ui.find({ key: 'clawd' }))?.props.marginLeft
+  const place = async () => {
+    const { width, flexShrink, marginLeft } =
+      (await ui.find({ key: 'clawd' }))?.props ?? {}
+
+    return { width, flexShrink, marginLeft }
+  }
 
   expect((await ui.find({ key: 'clawd' }))?.text).toBe(
     ' ▐▛███▛█▄╱✦▝▜██████▘ ▝▝   ▝▝ ',
@@ -219,11 +242,25 @@ test('Clawd stands by the meters with the wand up, his eyes on the backdrop', as
   )
   expect((await ui.find({ type: 'Text', text: '╱' }))?.props.bold).toBe(true)
 
-  const held = await place()
+  // Eleven cells wide whatever he does, right of the meters, which take what
+  // they need and no more however wide the band.
+  expect(await place()).toEqual({ width: 11, flexShrink: 0, marginLeft: 2 })
+  expect((await ui.find({ key: 'meters' }))?.props.width).toBe(16 + 36 + 2 + 20 + 12)
+
+  await ui.redraw(props({ bodyColumns: 200 }))
+
+  expect((await ui.find({ key: 'meters' }))?.props.width).toBe(16 + 36 + 2 + 20 + 12)
 
   await clock.advance(1000 + CAST_MS)
 
-  expect(await place()).toBe(held)
+  expect(await place()).toEqual({ width: 11, flexShrink: 0, marginLeft: 2 })
+
+  // Mid-trick, the wand put away: his top row is two cells shorter, his place
+  // the same.
+  await clock.set(NOW + JUMP_AT + 10 + 2 * TRICK_MS)
+
+  expect(await ui.find({ type: 'Text', text: '╱' })).toBeUndefined()
+  expect(await place()).toEqual({ width: 11, flexShrink: 0, marginLeft: 2 })
 })
 
 test('each cast the wand flares and a ripple of light crosses Clawd', async ($, on) => {
@@ -301,7 +338,7 @@ test('after each cast Clawd puts the wand away for one of the banner tricks, a n
 
   expect(await wand()).toBeUndefined()
   expect(await drawn()).toBe('         ' + ' ▐▛███▛█' + '·▜██████·')
-  expect((await ui.find({ type: 'Text', text: '·' }))?.props.color).toBe('inactive')
+  expect((await ui.find({ type: 'Text', text: /^·$/ }))?.props.color).toBe('inactive')
 
   await clock.advance(2 * TRICK_MS)
 
@@ -382,8 +419,13 @@ test('the figures follow the session between turns, working or not', async ($, o
   await clock.advance(1000)
 
   expect(await ui.find({ type: 'Text', text: '42%' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '↻ 2h 14m' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '91%' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '↻ 2:13:59' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '7d · 91% used' })).toBeDefined()
+
+  // The countdown goes by the second.
+  await clock.advance(1000)
+
+  expect(await ui.find({ type: 'Text', text: '↻ 2:13:58' })).toBeDefined()
 })
 
 const ACCOUNT = {
@@ -409,9 +451,10 @@ test('the account shows its windows before the first response, and whichever rea
   })
 
   expect(held.fetched).toEqual(['https://api.anthropic.com/api/oauth/usage held'])
-  expect(await ui.find({ type: 'Text', text: '31%' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '↻ 2h 14m' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '12%' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '5h · 31% used' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '↻ 2:13:59' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '7d · 12% used' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '↻ 6d 3h 59m' })).toBeDefined()
 
   // This session's own responses: the same five hours further on, and a
   // week the account's reading is ahead of.
@@ -424,8 +467,8 @@ test('the account shows its windows before the first response, and whichever rea
   }
   await clock.advance(1000)
 
-  expect(await ui.find({ type: 'Text', text: '40%' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '12%' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '5h · 40% used' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '7d · 12% used' })).toBeDefined()
 
   // Another session spends: only the account knows, a minute later at most.
   held.account = {
@@ -440,7 +483,9 @@ test('the account shows its windows before the first response, and whichever rea
   await ui.redraw(props({ isWorking: false }))
 
   expect(held.fetched.length).toBe(2)
-  expect(await ui.find({ type: 'Text', text: '55%' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '5h · 55% used' })).toBeDefined()
+  // Past half a window is still orange.
+  expect((await ui.find({ type: 'Text', text: '◷ ' }))?.props.color).toBe('claude')
 })
 
 test('a window past its reset reads empty, and a refused account is left alone for a while', async ($, on) => {
@@ -578,6 +623,66 @@ test('/clawd hides the band', async ($, on) => {
   await ui.redraw()
 
   expect(await ui.find({ key: 'clawd' })).toBeUndefined()
+})
+
+test('the header folds the deck to one line, and opens it again', async ($, on) => {
+  world(on, QUIET)
+
+  await $.session.start(START)
+  await $.session.measure({
+    ...MEASURED,
+    rateLimits: [...MEASURED.rateLimits],
+    changed: [...MEASURED.changed],
+  })
+  const ui = await $.ui.mount({
+    plugin: 'clawd-usage',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: props(),
+  })
+  const toggle = async () => (await ui.find({ type: 'Button' }))?.props
+
+  expect(await toggle()).toEqual({
+    key: 'toggle',
+    label: 'clawd ▾',
+    hotkey: '0',
+    plain: true,
+    dimColor: true,
+  })
+  expect(await ui.find({ type: 'Text', text: ' · 3 rows' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Session · 5h' })).toBeDefined()
+
+  await ui.press({ key: 'toggle' })
+
+  expect((await toggle())?.label).toBe('clawd ▸')
+  expect(await ui.find({ key: 'clawd' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: ' · ctx' }))?.text).toBe(
+    ' · ctx 42% · 5h 24% · 7d 91% · $1.24',
+  )
+
+  await ui.press({ key: 'toggle' })
+
+  expect((await toggle())?.label).toBe('clawd ▾')
+  expect(await ui.find({ key: 'clawd' })).toBeDefined()
+})
+
+test('a short band gives up the header before Clawd', async ($, on) => {
+  world(on, QUIET)
+
+  await $.session.start(START)
+  const ui = await $.ui.mount({
+    plugin: 'clawd-usage',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: props({ maxRows: 3 }),
+  })
+
+  expect(await ui.find({ type: 'Button' })).toBeUndefined()
+  expect(await ui.find({ key: 'clawd' })).toBeDefined()
+
+  await ui.redraw(props({ maxRows: 2 }))
+
+  expect((await ui.find({ type: 'Text' }))?.text).toBe('ctx –')
 })
 
 test('a narrow band keeps the figures on one line', async ($, on) => {

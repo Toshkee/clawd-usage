@@ -14,6 +14,10 @@ export type Usage = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'clawd-usage': { usage: Usage | null; isHidden: boolean }
+    'clawd-usage': {
+      usage: Usage | null
+      isHidden: boolean
+      isCollapsed: boolean
+    }
   }
 }

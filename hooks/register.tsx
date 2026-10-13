@@ -5,6 +5,10 @@ import type { Limit, Usage } from '../types'
 
 const usage = atom({ plugin: 'clawd-usage', key: 'usage' } as const, null)
 const isHidden = atom({ plugin: 'clawd-usage', key: 'isHidden' } as const, false)
+const isCollapsed = atom(
+  { plugin: 'clawd-usage', key: 'isCollapsed' } as const,
+  false,
+)
 
 // The cast is the engine's own, as its banner plays it under ultracode: a
 // frame every 128 ms, 24 of them from one flare of the wand to the next. A
@@ -32,9 +36,17 @@ const ACCOUNT_URL = 'https://api.anthropic.com/api/oauth/usage'
 const ACCOUNT_KINDS = ['five_hour', 'seven_day']
 const SAME_WINDOW_MS = 60_000
 
-const BAR_COLUMNS = 10
-const METERS_COLUMNS = 40
+// The deck: a header, then a row a meter, each its icon and name, a bar as
+// long as the band allows, what it reads and what is left, Clawd beside.
+const LABEL_COLUMNS = 16
+const DETAIL_COLUMNS = 20
+const ASIDE_COLUMNS = 12
+const BAR_MIN = 8
+const BAR_MAX = 36
 const GAP = 2
+const FILLED = '▰'
+const EMPTY = '▱'
+const TOGGLE_KEY = '0'
 
 type Rgb = { r: number; g: number; b: number }
 
@@ -328,9 +340,11 @@ const PICTURE = {
   width: CLAWD_COLUMNS * CELL.width,
   height: SPRITE_ROWS * CELL.height,
 }
-const BAR = { width: BAR_COLUMNS * CELL.width, height: 14 }
-const LABEL_COLUMNS = 4
-const PERCENT_COLUMNS = 7
+const BAR = { height: 14, segment: 10, slant: 2 }
+// What a row takes besides its bar: Clawd and the gap beside him, the name,
+// the gap after the bar, what it reads, what is left.
+const FIXED_COLUMNS =
+  CLAWD_COLUMNS + GAP + LABEL_COLUMNS + GAP + DETAIL_COLUMNS + ASIDE_COLUMNS
 
 // The part of its cell a block glyph fills, on a grid of halves across and
 // eighths down: left, top, width, height.
@@ -361,18 +375,30 @@ const INKS: Record<string, string> = {
   clawd_body: 'rgb(215,119,87)',
   clawd_background: 'rgb(0,0,0)',
   inactive: 'rgb(136,136,136)',
+  suggestion: 'rgb(140,150,248)',
+  claude: 'rgb(215,119,87)',
   success: 'rgb(64,168,88)',
   warning: 'rgb(224,160,16)',
   error: 'rgb(232,80,100)',
 }
 
-const LABELS: Record<string, string> = {
-  five_hour: '5h',
-  seven_day: '7d',
-  spend_limit: 'lim',
+// Each window's row: its icon, its name, and the short label the one-line
+// band and the bar's picture use.
+type Row = { icon: string; name: string; label: string }
+
+const CONTEXT: Row = { icon: '●', name: 'Context', label: 'ctx' }
+const ROWS: Record<string, Row> = {
+  five_hour: { icon: '◷', name: 'Session · 5h', label: '5h' },
+  seven_day: { icon: '◑', name: 'Weekly · 7d', label: '7d' },
+  spend_limit: { icon: '$', name: 'Spend limit', label: 'lim' },
 }
 
-type Meter = { label: string; percent: number | null; detail: string }
+type Meter = Row & {
+  percent: number | null
+  detail: string
+  aside: string
+  color: string
+}
 
 type Paint = (column: number, row: number) => string
 
@@ -464,44 +490,69 @@ const formatTokens = (tokens: number) =>
     ? `${Number((tokens / 1_000_000).toFixed(1))}M`
     : `${Math.round(tokens / 1000)}k`
 
+const twoDigits = (count: number) => String(count).padStart(2, '0')
+
+// What is left of a window: a clock's hours, minutes and seconds within a
+// day, days, hours and minutes beyond.
 const formatLeft = (ms: number) => {
-  const minutes = Math.max(0, Math.round(ms / 60_000))
-  const days = Math.floor(minutes / 1440)
-  const hours = Math.floor((minutes % 1440) / 60)
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  const days = Math.floor(seconds / 86_400)
+  const hours = Math.floor((seconds % 86_400) / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
 
   if (days > 0) {
-    return `${days}d ${hours}h`
+    return `${days}d ${hours}h ${minutes}m`
   }
 
-  return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`
+  return `${hours}:${twoDigits(minutes)}:${twoDigits(seconds % 60)}`
 }
 
+const FULL = 80
+
+// The context's color: its own while there is room, the warning's past half,
+// the error's near the end.
+const toneOf = (percent: number) =>
+  percent >= FULL ? 'error' : percent >= 50 ? 'warning' : 'suggestion'
+
+// A window's: Clawd's orange, the error's near the end.
+const limitToneOf = (percent: number) => (percent >= FULL ? 'error' : 'claude')
+
+const showPercent = (percent: number | null) =>
+  percent === null ? '–' : `${Math.round(percent)}%`
+
 const toMeters = (figures: Usage, now: number): Meter[] => {
-  const size = `${figures.tokens === null ? '–' : formatTokens(figures.tokens)}/${formatTokens(figures.window)}`
+  const size = `${figures.tokens === null ? '–' : formatTokens(figures.tokens)} / ${formatTokens(figures.window)}`
   const cost = figures.usd === null ? '' : ` · $${figures.usd.toFixed(2)}`
 
   return [
-    { label: 'ctx', percent: figures.percent, detail: size + cost },
+    {
+      ...CONTEXT,
+      percent: figures.percent,
+      detail: size + cost,
+      aside: showPercent(figures.percent),
+      color: toneOf(figures.percent ?? 0),
+    },
     ...figures.limits.map(limit => {
+      const row = ROWS[limit.kind] ?? {
+        icon: '○',
+        name: limit.kind,
+        label: limit.kind.slice(0, 3),
+      }
       const reset = resetOf(limit)
       // Past its reset a window has nothing used until a reading says so.
       const isOver = reset !== null && reset <= now
+      const percent = isOver ? 0 : limit.percentUsed
 
       return {
-        label: LABELS[limit.kind] ?? limit.kind.slice(0, 3),
-        percent: isOver ? 0 : limit.percentUsed,
-        detail:
-          reset === null || isOver ? '' : `↻ ${formatLeft(reset - now)}`,
+        ...row,
+        percent,
+        detail: `${row.label} · ${showPercent(percent)} used`,
+        aside: reset === null || isOver ? '' : `↻ ${formatLeft(reset - now)}`,
+        color: limitToneOf(percent),
       }
     }),
   ]
 }
-
-const toneOf = (percent: number) =>
-  percent >= 80 ? 'error' : percent >= 50 ? 'warning' : 'success'
-
-const showPercent = (percent: number | null) =>
-  percent === null ? '–' : `${Math.round(percent)}%`
 
 const mix = (from: Rgb, to: Rgb, share: number): Rgb => ({
   r: Math.round(from.r + (to.r - from.r) * share),
@@ -747,16 +798,25 @@ const toPicture = (rows: Cell[][], wand: Wand | null) => {
   )
 }
 
-// A meter's bar as a picture: its track, and as much of it lit as the
-// terminal's blocks would be.
-const toBar = (filled: number, tone: string) =>
-  toSvg(
-    BAR.width,
-    BAR.height,
-    `<g shape-rendering="crispEdges">` +
-      `<rect width="${BAR.width}" height="${BAR.height}" fill="${toInk('inactive')}" fill-opacity="0.3"/>` +
-      `<rect width="${filled * CELL.width}" height="${BAR.height}" fill="${toInk(tone)}"/></g>`,
-  )
+// A meter's bar as a picture: a slanted segment a cell, as the terminal's
+// parallelograms, the lit ones filled and the rest outlined.
+const toBar = (columns: number, filled: number, tone: string) => {
+  const top = (BAR.height - BAR.segment) / 2
+  const bottom = top + BAR.segment
+  const segments = Array.from({ length: columns }, (_, at) => {
+    const left = at * CELL.width + 1
+    const right = left + CELL.width - 2
+    const points =
+      `${left + BAR.slant},${top} ${right},${top} ` +
+      `${right - BAR.slant},${bottom} ${left},${bottom}`
+
+    return at < filled
+      ? `<polygon points="${points}" fill="${toInk(tone)}"/>`
+      : `<polygon points="${points}" fill="none" stroke="${toInk('inactive')}" stroke-opacity="0.6"/>`
+  })
+
+  return toSvg(columns * CELL.width, BAR.height, segments.join(''))
+}
 
 // What the timer and the drawing share; a reload starts it over, harmlessly.
 const band = {
@@ -1002,24 +1062,55 @@ export const register: Register = on => {
       return next(e)
     }
 
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     // Only the terminal draws block glyphs in whole cells: the rest get the
     // pictures.
     const Svg = e.surface === 'terminal' ? null : $.ui.resolve(e).Svg
     const meters = toMeters(figures, await $.clock.now())
-    const rows = Math.max(SPRITE_ROWS, meters.length)
+    const summary =
+      meters
+        .map(meter => `${meter.label} ${showPercent(meter.percent)}`)
+        .join(' · ') +
+      (figures.usd === null ? '' : ` · $${figures.usd.toFixed(2)}`)
+    const collapsed = await read($, isCollapsed)
+    // The deck's header: a press, or its key, folds the meters to one line
+    // and opens them again.
+    const toggle = (
+      <Button
+        key="toggle"
+        label={collapsed ? 'clawd ▸' : 'clawd ▾'}
+        hotkey={TOGGLE_KEY}
+        plain
+        dimColor
+        onPress={async () => {
+          wake()
+          await update($, isCollapsed, held => !held)
+        }}
+      />
+    )
 
-    band.isDrawn =
-      e.props.maxRows >= rows &&
-      e.props.bodyColumns >= METERS_COLUMNS + GAP + CLAWD_COLUMNS
+    if (collapsed) {
+      band.isDrawn = false
+
+      return (
+        <Box>
+          {toggle}
+          <Text dimColor wrap="truncate-end">
+            {` · ${summary}`}
+          </Text>
+        </Box>
+      )
+    }
+
+    const rows = Math.max(SPRITE_ROWS, meters.length)
+    const columns = Math.min(BAR_MAX, e.props.bodyColumns - FIXED_COLUMNS)
+
+    band.isDrawn = e.props.maxRows >= rows && columns >= BAR_MIN
 
     if (!band.isDrawn) {
       return (
         <Text dimColor wrap="truncate-end">
-          {meters
-            .map(meter => `${meter.label} ${showPercent(meter.percent)}`)
-            .join(' · ')}
-          {figures.usd === null ? '' : ` · $${figures.usd.toFixed(2)}`}
+          {summary}
         </Text>
       )
     }
@@ -1027,94 +1118,117 @@ export const register: Register = on => {
     const { frame, paint, wand } = toLook()
 
     return (
-      <Box>
-        <Box flexDirection="column" width={METERS_COLUMNS}>
-          {meters.map(meter => {
-            const percent = meter.percent ?? 0
-            const filled = Math.min(
-              BAR_COLUMNS,
-              Math.ceil((percent / 100) * BAR_COLUMNS),
-            )
+      <Box flexDirection="column">
+        {/* The header takes a row of its own where the band has one spare. */}
+        {e.props.maxRows > rows ? (
+          <Box>
+            {toggle}
+            <Text dimColor>
+              {` · ${meters.length} ${meters.length === 1 ? 'row' : 'rows'}`}
+            </Text>
+          </Box>
+        ) : null}
+        <Box>
+          <Box
+            key="meters"
+            flexDirection="column"
+            width={LABEL_COLUMNS + columns + GAP + DETAIL_COLUMNS + ASIDE_COLUMNS}
+          >
+            {meters.map(meter => {
+              const filled = Math.min(
+                columns,
+                Math.ceil(((meter.percent ?? 0) / 100) * columns),
+              )
 
-            if (Svg) {
               return (
                 <Box alignItems="center">
                   <Box width={LABEL_COLUMNS}>
-                    <Text dimColor>{meter.label}</Text>
+                    <Text color={meter.color}>{`${meter.icon} `}</Text>
+                    <Text bold wrap="truncate-end">
+                      {meter.name}
+                    </Text>
                   </Box>
-                  <Svg
-                    source={toBar(filled, toneOf(percent))}
-                    alt={`${meter.label} ${showPercent(meter.percent)}`}
-                    width={BAR.width}
-                    height={BAR.height}
-                  />
-                  <Box
-                    width={PERCENT_COLUMNS}
-                    paddingRight={2}
-                    justifyContent="flex-end"
-                  >
-                    <Text>{showPercent(meter.percent)}</Text>
+                  {Svg ? (
+                    <Svg
+                      source={toBar(columns, filled, meter.color)}
+                      alt={`${meter.label} ${showPercent(meter.percent)}`}
+                      width={columns * CELL.width}
+                      height={BAR.height}
+                    />
+                  ) : (
+                    <Box>
+                      <Text color={meter.color}>{FILLED.repeat(filled)}</Text>
+                      <Text dimColor>{EMPTY.repeat(columns - filled)}</Text>
+                    </Box>
+                  )}
+                  <Box width={DETAIL_COLUMNS} marginLeft={GAP}>
+                    <Text color={meter.color} wrap="truncate-end">
+                      {meter.detail}
+                    </Text>
                   </Box>
-                  <Text dimColor wrap="truncate-end">
-                    {meter.detail}
-                  </Text>
+                  <Box width={ASIDE_COLUMNS} justifyContent="flex-end">
+                    <Text dimColor wrap="truncate-start">
+                      {meter.aside}
+                    </Text>
+                  </Box>
                 </Box>
               )
-            }
-
-            return (
-              <Box>
-                <Text dimColor>{meter.label.padEnd(LABEL_COLUMNS)}</Text>
-                <Text color={toneOf(percent)}>{'█'.repeat(filled)}</Text>
-                <Text dimColor>{'░'.repeat(BAR_COLUMNS - filled)}</Text>
-                <Text>{` ${showPercent(meter.percent).padStart(4)}  `}</Text>
-                <Text dimColor wrap="truncate-end">
-                  {meter.detail}
-                </Text>
-              </Box>
-            )
-          })}
+            })}
+          </Box>
+          {/* Clawd keeps his place whatever the frame: the wand put away for a
+              trick takes two cells off his top row, never off his room. */}
+          {Svg ? (
+            <Box
+              key="clawd"
+              flexShrink={0}
+              marginLeft={GAP}
+              alignSelf="center"
+            >
+              <Svg
+                source={toPicture(toDrawn(frame, paint), wand)}
+                alt="Clawd"
+                width={PICTURE.width}
+                height={PICTURE.height}
+              />
+            </Box>
+          ) : (
+            <Box
+              key="clawd"
+              flexDirection="column"
+              width={CLAWD_COLUMNS}
+              flexShrink={0}
+              marginLeft={GAP}
+            >
+              {toDrawn(frame, paint).map((cells, row) => (
+                <Box>
+                  {toPieces(cells).map(piece =>
+                    piece.on === 'face' ? (
+                      <Text color={piece.color} backgroundColor={BACKDROP}>
+                        {piece.glyphs}
+                      </Text>
+                    ) : piece.on === 'lid' ? (
+                      <Text color={BACKDROP} backgroundColor={piece.color}>
+                        {piece.glyphs}
+                      </Text>
+                    ) : (
+                      <Text color={piece.color}>{piece.glyphs}</Text>
+                    ),
+                  )}
+                  {wand && row === TIP.row ? (
+                    <Text color={wand.wand} bold>
+                      {WAND}
+                    </Text>
+                  ) : null}
+                  {wand && row === TIP.row ? (
+                    <Text color={wand.flame} bold={wand.isFlaring}>
+                      {FLAME}
+                    </Text>
+                  ) : null}
+                </Box>
+              ))}
+            </Box>
+          )}
         </Box>
-        {Svg ? (
-          <Box key="clawd" marginLeft={GAP} alignSelf="center">
-            <Svg
-              source={toPicture(toDrawn(frame, paint), wand)}
-              alt="Clawd"
-              width={PICTURE.width}
-              height={PICTURE.height}
-            />
-          </Box>
-        ) : (
-          <Box key="clawd" flexDirection="column" marginLeft={GAP}>
-            {toDrawn(frame, paint).map((cells, row) => (
-              <Box>
-                {toPieces(cells).map(piece =>
-                  piece.on === 'face' ? (
-                    <Text color={piece.color} backgroundColor={BACKDROP}>
-                      {piece.glyphs}
-                    </Text>
-                  ) : piece.on === 'lid' ? (
-                    <Text color={BACKDROP} backgroundColor={piece.color}>
-                      {piece.glyphs}
-                    </Text>
-                  ) : (
-                    <Text color={piece.color}>{piece.glyphs}</Text>
-                  ),
-                )}
-                {wand && row === TIP.row ? (
-                  <Text color={wand.wand} bold>
-                    {WAND}
-                  </Text>
-                ) : null}
-                {wand && row === TIP.row ? (
-                  <Text color={wand.flame} bold={wand.isFlaring}>
-                    {FLAME}
-                  </Text>
-                ) : null}
-              </Box>
-            ))}
-          </Box>
-        )}
       </Box>
     )
   })
